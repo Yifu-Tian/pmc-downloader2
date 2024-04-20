@@ -24,35 +24,25 @@ const Search = () => {
       throw error;
     }
   };
-  const fetchCitation = async (pmcid) => {
-    const proxy = 'https://cors-anywhere.herokuapp.com/';
-    const url = `${proxy}https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id=${pmcid}`;
-    try {
-      const response = await fetch(url, {
-        headers: {
-          'x-requested-with': 'XMLHttpRequest'
-	}
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
-      const text = await response.text();
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(text, "application/xml");
-      const errorNode = xmlDoc.querySelector("error");
-      if (errorNode && errorNode.textContent.includes("is not Open Access")) {
-        return `PMC${pmcid} is not open access`;
-      }
-
-      const citation = xmlDoc.querySelector("record[citation]").getAttribute("citation");
-      return citation;
-
-    } catch (error) {
-      console.error('Error fetching citation for PMCID: ', pmcid, error);
-      return "Error fetching citation";
-    }
-
-  };
+  const getCitations = async (pmcids) => {
+    const citations = {};
+    const delay = 250;
+    for (const pmcid of pmcids){
+      try{
+        await new Promise(resolve => setTimeout(resolve, delay));
+	const response = await fetch(`https://api.ncbi.nlm.nih.gov/lit/ctxp/v1/pmc/?format=citation&contenttype=json&id=${pmcid}`);
+	if (!response.ok) {
+	  throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+	const data = await response.json();
+        citations[pmcid] = data.apa.orig;
+	} catch (error) {
+	  console.error(`Error fetching citation for PMCID: ${pmcid}`, pmcid, error);
+	  citations[pmcid] = 'Error fetching citation';
+        }
+    };
+    return citations;
+};
 
   const searchArticlesByAuthor = async () => {
     setError('');
@@ -60,10 +50,9 @@ const Search = () => {
     setArticles([]);
     
     const query = encodeURIComponent(authorName.trim() + '[AUTH]');
- 
+    let start = 0;
+    let ids = [];
     try {
-      let start = 0;
-      let ids = [];
       while (true) {
         const newIds = await fetchArticles(query, start);
         if (newIds.length === 0) {
@@ -72,14 +61,10 @@ const Search = () => {
         ids = ids.concat(newIds);
         start += 50;
       }
-    ids.forEach(async (pmcid) => {
-      const citation = await fetchCitation(pmcid);
-      setCitations(prevCitations => ({ ...prevCitations, [pmcid]: citation }));
-    });
+    let citations = await getCitations(ids);
     setArticles(ids.map(pmcid => ({
         pmcid,
-
-        citation: citations[pmcid],  // 初始化citation为占位符
+	citation: citations[pmcid],
         downloadUrl: `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcid}/pdf/`,
       })));
     } catch (error) {
@@ -172,8 +157,13 @@ const Search = () => {
       <ul className="articles-list">
 	  {articles.map((article, index)=>(
 	    <li key={index} style={listItemStyle}>
-	      <span>{citations[article.pmcid]}</span>
-	        <button onClick={() => handleDownloadClick(article.pmcid, citations[article.pmcid])}>
+	      <a href={article.downloadUrl} 
+                  style={{ color: 'white', textDecoration: 'none', fontSize: '10px' }}
+		  target="_blank" rel="noopener noreferrer">
+		  
+		  {article.citation}
+	      </a>
+	        <button onClick={() => handleDownloadClick(article.pmcid, article.downloadUrl)} style={{ padding: '5px 10px', fontSize: '12px' }}>
 		  Download PDF
 		</button>
 	      </li>
