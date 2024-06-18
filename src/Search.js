@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import ProxyModal from './ProxyModal';
+import './styles.css';
 
 const Search = () => {
   const [authorName, setAuthorName] = useState('');
@@ -6,6 +8,31 @@ const Search = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [citations, setCitations] = useState({});
+  const [showModal, setShowModal] = useState(false);
+  const [useProxy, setUseProxy] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isDownloadComplete, setIsDownloadComplete] = useState(false);
+  const [showProgress, setShowProgress] = useState(false);
+  const [searchProgress, setSearchProgress] = useState(0);
+  const checkProxy = async () => {
+    try {
+      const response = await fetch('https://cors-anywhere.herokuapp.com/');
+      return response.ok;
+    } catch (error) {
+      console.error('Error checking proxy:', error);
+      return false;
+    }
+  };
+  useEffect(() => {
+    const detectProxy = async () => {
+      const isProxySet = await checkProxy();
+      setUseProxy(isProxySet);
+      setShowModal(true);
+    };
+
+    detectProxy();
+
+  }, []);
 
   const fetchArticles = async (query, start) => {
     const targetUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pmc&term=${query}&retmax=50&retstart=${start}`;
@@ -27,6 +54,7 @@ const Search = () => {
   const getCitations = async (pmcids) => {
     const citations = {};
     const delay = 250;
+    console.log("length:", pmcids.length);
     for (const pmcid of pmcids){
       try{
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -48,7 +76,9 @@ const Search = () => {
     setError('');
     setLoading(true);
     setArticles([]);
-    
+    setIsDownloadComplete(false);
+    setShowProgress(false); // 隐藏下载进度
+    setSearchProgress(0); // 重置搜索进度
     const query = encodeURIComponent(authorName.trim() + '[AUTH]');
     let start = 0;
     let ids = [];
@@ -59,7 +89,9 @@ const Search = () => {
           break;
         }
         ids = ids.concat(newIds);
+	setSearchProgress(ids.length);
         start += 50;
+      
       }
     let citations = await getCitations(ids);
     setArticles(ids.map(pmcid => ({
@@ -73,7 +105,7 @@ const Search = () => {
       setLoading(false);
     }
 };
-  const handleDownloadClick = (articleId, articleTitle) => {
+  const handleDownloadClick = async (articleId, articleTitle) => {
     // 这里使用了Cors Anywhere代理服务
     const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
     const targetUrl = `https://www.ncbi.nlm.nih.gov/pmc/articles/${articleId}/pdf/`;
@@ -101,20 +133,54 @@ const Search = () => {
         window.URL.revokeObjectURL(url);
       })
       .catch((error) => {
-        setLoading(false);
-        setError(`Download failed: ${error.message}`);
-      });
+	  console.error('adding to retry list.');
+          setLoading(false);
+          setError(`Download failed: ${error.message}`);
+	  return false;
+	})
+      return true;
   };
 
-  const handleDownloadAllClick = () => {
-    articles.forEach((article, index) =>{
-	setTimeout(() => {
-	  handleDownloadClick(article.pmcid, article.citation);
-	
-	}, index * 1000);
-    });
+  const handleDownloadAllClick = async () => {
+    const retryList = [];
+    setDownloadProgress(0);
+    setShowProgress(true);
+    for (const [index, article] of articles.entries()) {
+      try {
+        await new Promise(resolve => setTimeout(resolve, index * 100));
+        const success = await handleDownloadClick(article.pmcid, article.citation);
+	if (!success) {
+          retryList.push(article);
+	}
+      } catch (error) {
+          console.error('Download failed: ', error.message);
+	  retryList.push(article);
+      }
+      setDownloadProgress(prev => prev + 1);
+    };
+    console.log('retry list: ', retryList);
+    for (const article of retryList) {
+      let success = false;
+      while (!success){
+        try {
+          await new Promise(resolve => setTimeout(resolve, 60000)); // 等待60秒重试
+          success = await handleDownloadClick(article.pmcid, article.citation);
+	  setDownloadProgress(prev => prev + 1);
+      } catch (error) {
+          console.error('Retry failed:', error.message);
+      }
+      }
+    }
+    setIsDownloadComplete(true);
   };
-
+  const handleConfirm = () => {
+    setUseProxy(true);
+    setShowModal(false);
+  };
+  const handleClose = () => {
+    setUseProxy(false);
+    setShowModal(false);
+  }
   const listItemStyle = {
     display: 'flex',
     justifyContent: 'space-between',
@@ -153,7 +219,18 @@ const Search = () => {
       <button style={downloadAllStyle} onClick={handleDownloadAllClick} disabled={articles.length === 0}>
 	  Download All Articles
       </button>
-      <button onClick={unlockAccess}>Click here to access</button>
+      <ProxyModal show={showModal} onClose={handleClose} onConfirm={handleConfirm} useProxy={useProxy}/>
+      {searchProgress > 0 && (
+           <div>
+                 Articles found: {searchProgress}
+           </div>
+         )}
+      {showProgress && (
+            <div>
+              Download progress: {downloadProgress}/{articles.length}
+            </div>
+      )}
+      {isDownloadComplete && <div>Download complete!</div>}
       <ul className="articles-list">
 	  {articles.map((article, index)=>(
 	    <li key={index} style={listItemStyle}>
